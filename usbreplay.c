@@ -109,6 +109,7 @@ static FILE * file = NULL;
 static char * filename = NULL;
 
 static int dry_run = 0;
+static int debug = 0;
 
 static volatile int done = 0;
 
@@ -148,13 +149,20 @@ int pcapreader_init() {
     return 0;
 }
 
-static void dump(const unsigned char* packet, unsigned char length)
+static void dump(const unsigned char* packet, unsigned char length, unsigned char width)
 {
-  int i;
-  for(i = 0; i < length; ++i)
-  {
-    printf("0x%02x ", packet[i]);
-  }
+    unsigned int i = 0;
+    for (i = 0; i < length; ++i) {
+        printf("0x%02x ", packet[i]);
+        if (width != 0) {
+            if (i != 0 && i % width == 0) {
+                printf("\n");
+            }
+        }
+    }
+    if (width != 0) {
+        printf("\n");
+    }
 }
 
 struct transfer {
@@ -217,6 +225,7 @@ static inline unsigned long long int get_time() {
 
 void dump_packet(usbmon_packet_t * rec) {
     
+    // TODO MLA: print relative time instead of absolute time
     printf("%lu.%06u %d", rec->ts_sec, rec->ts_usec, rec->devnum);
 
     switch (rec->type) {
@@ -253,12 +262,12 @@ void dump_packet(usbmon_packet_t * rec) {
     
     if (rec->flag_setup == 0x00) {
         printf(" setup ");
-        dump(rec->s.setup, sizeof(rec->s.setup));
+        dump(rec->s.setup, sizeof(rec->s.setup), 0);
     }
     
     if (rec->flag_data == 0x00) {
         printf(" data ");
-        dump(((unsigned char *)rec) + sizeof(*rec), rec->length);
+        dump(((unsigned char *)rec) + sizeof(*rec), rec->length, 0);
     }
     
     /*
@@ -497,6 +506,9 @@ static int get_devices() {
 
     struct transfer * it;
     for (it = GLIST_BEGIN(transfers); it != GLIST_END(transfers); it = it->next) {
+        if (it->s->devnum == 0) {
+            continue;
+        }
         if (it->s->xfer_type == XFER_TYPE_CONTROL && it->s->flag_setup == 0x00) {
             struct usb_ctrlrequest * req = (struct usb_ctrlrequest *) it->s->s.setup;
             if (req->bRequestType == USB_DIR_IN
@@ -717,10 +729,17 @@ static int submit_transfer(void * user) {
 
         uint8_t ep_num = t->s->epnum;
 
+        if ((ep_num & USB_ENDPOINT_NUMBER_MASK) == 0x00)
+        {
+            ep_num = 0; // endpoint 0 is always OUT
+        }
+
         ep_num =  cap_to_device_endpoint[ep_num & USB_ENDPOINT_NUMBER_MASK][ep_num >> 7];
 
         if (ep_transfers[ep_num & USB_ENDPOINT_NUMBER_MASK][ep_num >> 7] != NULL) {
-            printf("a transfer is pending for endpoint 0x%02x, retry in 1ms\n", ep_num);
+            if (ep_num == 0) {
+                printf("a transfer is pending for endpoint 0x%02x, retry in 1ms\n", ep_num);
+            }
             if (schedule_transfer(t, 1000) < 0) {
                 done = 1;
                 return 1;
@@ -772,6 +791,9 @@ static int submit_transfer(void * user) {
         }
 
         if (ret == 0) {
+            if (debug) {
+                printf("push %p for ep %02x\n", t, ep_num);
+            }
             ep_transfers[ep_num & USB_ENDPOINT_NUMBER_MASK][ep_num >> 7] = t;
         }
 
@@ -874,29 +896,46 @@ static void compare_data(unsigned int llength, unsigned char * left, unsigned in
         printf("\n");
         i += 8;
     }
+    printf("\n");
 }
 
 static int usb_read(void * user __attribute__((unused)), unsigned char endpoint, const void * buf, int status) {
 
     struct transfer * t = ep_transfers[endpoint & USB_ENDPOINT_NUMBER_MASK][endpoint >> 7];
 
+    if (debug) {
+        printf("pop %p for ep %02x\n", t, endpoint);
+        printf("ep 0x%02x read status %d\n", endpoint, status);
+    }
+
     compare_status(t, status);
 
     if (status >= 0 && t->c->status == 0) {
 
+        int dump = 0;
         if (status == 0) {
             if (t->c->flag_data == 0) {
                 printf(KRED"expected data\n"KNRM);
+                dump = 1;
             }
         } else {
             if (t->c->flag_data != 0) {
                 printf(KRED"unexpected data\n"KNRM);
-            } else {
-                if (status != t->c->length) {
-                    printf(KRED"expected %u bytes, got %d\n"KNRM, t->c->length, status);
-                }
-                compare_data(t->c->length, ((unsigned char *)t->c) + sizeof(*t->c), status, (unsigned char *)buf);
+                dump = 1;
+            } else if (status != t->c->length) {
+                printf(KRED"expected %u bytes, got %d\n"KNRM, t->c->length, status);
+                dump = 1;
             }
+        }
+        if (dump != 0) {
+            printf(KRED"submitted packet:");
+            dump_packet(t->s);
+            printf("\nexpected packet:");
+            dump_packet(t->c);
+            printf(KNRM);
+        }
+        if (endpoint == 0x00) {
+            compare_data(t->c->length, ((unsigned char *)t->c) + sizeof(*t->c), status, (unsigned char *)buf);
         }
     }
 
@@ -908,6 +947,18 @@ static int usb_read(void * user __attribute__((unused)), unsigned char endpoint,
 static int usb_write(void * user __attribute__((unused)), unsigned char endpoint, int status) {
 
     struct transfer * t = ep_transfers[endpoint & USB_ENDPOINT_NUMBER_MASK][endpoint >> 7];
+
+    if (debug) {
+        printf("pop %p for ep %02x\n", t, endpoint);
+        printf("ep 0x%02x write status %d\n", endpoint, status);
+    }
+
+    if (t->s->flag_setup == 0) {
+        dump(t->s->s.setup, sizeof(t->s->s.setup), 8);
+    }
+    if (t->s->flag_data == 0) {
+        dump((unsigned char *)t->s + sizeof(t->s), t->s->length, 8);
+    }
 
     compare_status(t, status);
 
@@ -973,6 +1024,7 @@ int main(int argc, char * argv[]) {
 
         gusb_init();
 
+        //char * path = select_device(0x0000, 0x0000);
         char * path = select_device(device_info->vid, device_info->pid);
         if (path == NULL) {
             gusb_exit();
