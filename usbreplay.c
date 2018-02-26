@@ -126,26 +126,26 @@ int pcapreader_init() {
         fprintf(stderr, "fopen");
         return -1;
     }
-    
+
     pcap_hdr_t capture_header;
-    
+
     int ret = fread(&capture_header, 1, sizeof(capture_header), file);
-    
+
     if (ret != sizeof(capture_header)) {
         fprintf(stderr, "unable to read pcap header\n");
         return -1;
     }
-    
+
     if (capture_header.magic_number != 0xa1b2c3d4) {
         fprintf(stderr, "unable to read pcap header magic byte\n");
         return -1;
     }
-    
+
     if (capture_header.network != DLT_USB_LINUX_MMAPPED) {
         fprintf(stderr, "invalid network type: %x\n", capture_header.network);
         return -1;
     }
-    
+
     return 0;
 }
 
@@ -307,7 +307,7 @@ void dump_packet(usbmon_packet_t * rec) {
           printf("unrecognised urb status %d", rec->status);
           break;
     }
-    
+
     if (rec->flag_data == 0x00 && rec->len_cap < rec->length) {
         fprintf(stderr, "missing data\n");
     }
@@ -332,7 +332,7 @@ int pcapreader_read() {
 
     usbmon_packet_t * rec = calloc(1, rec_header.incl_len);
     if (rec == NULL) {
-        PRINT_ERROR_ALLOC_FAILED("calloc")
+        fprintf(stderr, "calloc failed\n");
         return -1;
     }
 
@@ -346,7 +346,7 @@ int pcapreader_read() {
 
         struct transfer * t = calloc(1, sizeof(*t));
         if (t == NULL) {
-            PRINT_ERROR_ALLOC_FAILED("calloc")
+            fprintf(stderr, "calloc failed\n");
             free(rec);
             return -1;
         }
@@ -439,7 +439,7 @@ static char * select_device(uint16_t vid, uint16_t pid) {
 
     struct gusb_device_info * usb_devs = gusb_enumerate(vid, pid);
     if (usb_devs == NULL) {
-        PRINT_ERROR_OTHER("None of the connected USB devices match!")
+        fprintf(stderr, "None of the connected USB devices match!\n");
         return NULL;
     }
     printf("Available USB devices:\n");
@@ -463,10 +463,10 @@ static char * select_device(uint16_t vid, uint16_t pid) {
         }
         path = strdup(current->path);
         if (path == NULL) {
-            PRINT_ERROR_OTHER("can't duplicate path.");
+            fprintf(stderr, "can't duplicate path\n");
         }
     } else {
-        PRINT_ERROR_OTHER("Invalid choice.");
+        fprintf(stderr, "Invalid choice.\n");
     }
 
     gusb_free_enumeration(usb_devs);
@@ -533,7 +533,7 @@ static int get_devices() {
                 }
                 struct cap_device * device = calloc(1, sizeof(*device));
                 if (device == NULL) {
-                    PRINT_ERROR_ALLOC_FAILED("calloc")
+                    fprintf(stderr, "calloc failed\n");
                     return -1;
                 }
                 device->vid = desc->idVendor;
@@ -546,7 +546,7 @@ static int get_devices() {
     }
 
     if (GLIST_IS_EMPTY(cap_devices)) {
-        PRINT_ERROR_OTHER("no device found in the capture file")
+        fprintf(stderr, "no device found in the capture file\n");
         return -1;
     }
 
@@ -556,7 +556,7 @@ static int get_devices() {
 static int get_endpoint(struct usb_endpoint_descriptor * endpoint, struct endpoints * eps) {
 
     if (eps->nb == sizeof(eps->descriptors) / sizeof(*eps->descriptors)) {
-        PRINT_ERROR_OTHER("no more room to store endpoint layout")
+        fprintf(stderr, "no more room to store endpoint layout\n");
         return -1;
     }
 
@@ -653,7 +653,7 @@ static struct cap_device * select_device_pcap() {
         }
         return it;
     } else {
-        PRINT_ERROR_OTHER("Invalid choice.");
+        fprintf(stderr, "Invalid choice.\n");
     }
 
     return NULL;
@@ -754,12 +754,12 @@ static int submit_transfer(void * user) {
             if ((ep_num & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
                 ret = gusb_poll(usb_device, ep_num);
                 if (ret == -1) {
-                    PRINT_ERROR_OTHER("gusb_poll failed")
+                    fprintf(stderr, "gusb_poll failed\n");
                 }
             } else if (t->s->flag_data) {
                 ret = gusb_write(usb_device, ep_num, ((unsigned char *)t->s) + sizeof(*t->s), t->s->length);
                 if (ret == -1) {
-                    PRINT_ERROR_OTHER("gusb_write failed")
+                    fprintf(stderr, "gusb_write failed\n");
                 }
             }
             break;
@@ -778,13 +778,13 @@ static int submit_transfer(void * user) {
 
             ret = gusb_write(usb_device, 0, buf, sizeof(t->s->s.setup) + t->s->length);
             if (ret == -1) {
-                PRINT_ERROR_OTHER("gusb_write failed")
+                fprintf(stderr, "gusb_write failed\n");
             }
             break;
         }
         case XFER_TYPE_BULK:
         case XFER_TYPE_ISOCHRONOUS:
-            PRINT_ERROR_OTHER("bulk and isochronous endpoints are not supported")
+            fprintf(stderr, "bulk and isochronous endpoints are not supported\n");
             break;
         default:
             break;

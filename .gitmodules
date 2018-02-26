@@ -13,3 +13,6 @@
 [submodule "lib/gimxusb"]
 	path = lib/gimxusb
 	url = https://github.com/matlo/gimxusb.git
+[submodule "lib/gimxlog"]
+	path = lib/gimxlog
+	url = https://github.com/matlo/gimxlog.git

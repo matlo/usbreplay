@@ -9,30 +9,30 @@ SCRIPTS=
 OBJECTS = $(patsubst %.c,%.o,$(shell find . -name "*.c" -not -path "./test/*" -not -path "./lib/*"))
 OBJECTS:=$(filter-out test/*,$(OBJECTS))
 
-DIRS = lib/gimxpoll lib/gimxprio lib/gimxtimer lib/gimxusb
+DIRS = lib/gimxlog lib/gimxpoll lib/gimxprio lib/gimxtimer lib/gimxusb
 
 BUILDDIRS = $(DIRS:%=build-%)
 INSTALLDIRS = $(DIRS:%=install-%)
 CLEANDIRS = $(DIRS:%=clean-%)
 UNINSTALLDIRS = $(DIRS:%=uninstall-%)
 
-ifeq ($(OS),Windows_NT)
-build-gimxusb: build-gimxtimer build-gimxpoll
-endif
-
 all: $(BUILDDIRS) $(BINS)
-
 $(DIRS): $(BUILDDIRS)
-
 $(BUILDDIRS):
 	$(MAKE) -C $(@:build-%=%)
 
-usbreplay: $(OBJECTS)
+build-lib/gimxpoll: build-lib/gimxlog
+build-lib/gimxprio: build-lib/gimxlog
+build-lib/gimxtimer: build-lib/gimxlog
+build-lib/gimxusb: build-lib/gimxlog build-lib/gimxtimer
+
+usbreplay: $(OBJECTS) $(BUILDDIRS)
+	$(CC) $(LDFLAGS) $(TARGET_ARCH) $(OBJECTS) $(LOADLIBES) $(LDLIBS) -o $@
 
 clean: $(CLEANDIRS)
 	$(RM) $(OBJECTS) $(BINS)
 
-$(CLEANDIRS): 
+$(CLEANDIRS):
 	$(MAKE) -C $(@:clean-%=%) clean
 
 install: $(INSTALLDIRS) all
