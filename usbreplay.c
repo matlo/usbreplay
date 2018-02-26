@@ -113,6 +113,8 @@ static int debug = 0;
 
 static volatile int done = 0;
 
+static uint64_t packet_number = 0;
+
 void terminate(int sig) {
 
   done = 1;
@@ -168,6 +170,7 @@ static void dump(const unsigned char* packet, unsigned char length, unsigned cha
 struct transfer {
     usbmon_packet_t * s; // submitted request
     usbmon_packet_t * c; // completion result
+    uint64_t number;
     GLIST_LINK(struct transfer)
 };
 
@@ -183,6 +186,25 @@ static int transfer_close(struct transfer * t) {
 }
 
 GLIST_INST(struct transfer, transfers, transfer_close)
+
+struct range {
+    uint64_t min;
+    uint64_t max;
+    GLIST_LINK(struct range)
+};
+
+static int ranges_close(struct range * r) {
+
+    GLIST_REMOVE(ranges, r)
+
+    free(r);
+
+    return 0;
+}
+
+GLIST_INST(struct range, ranges, ranges_close)
+
+static struct range * current_range = NULL;
 
 // the target device
 static struct cap_device * device_info = NULL;
@@ -317,6 +339,8 @@ void dump_packet(usbmon_packet_t * rec) {
 
 int pcapreader_read() {
 
+    ++packet_number;
+
     pcaprec_hdr_t rec_header;
 
     int ret = fread(&rec_header, 1, sizeof(rec_header), file);
@@ -352,6 +376,7 @@ int pcapreader_read() {
         }
 
         t->s = rec;
+        t->number = packet_number;
 
         GLIST_ADD(transfers, t)
 
@@ -378,6 +403,46 @@ static void usage(char * cmd, int status) {
     exit(status);
 }
 
+static struct range * get_range(char ** ptr) {
+
+    char * startptr = *ptr;
+    long int min = -1;
+    long int max = -1;
+    if (*startptr == ',') {
+        ++startptr;
+    }
+    do {
+        char * endptr = NULL;
+        if (min == -1) {
+            min = strtol(startptr, &endptr, 10);
+            if (*endptr == '-') {
+                startptr = endptr + 1;
+            } else if (*endptr == '\0') {
+                break;
+            }
+        } else {
+            max = strtol(startptr, &endptr, 10);
+            *ptr = endptr;
+            break;
+        }
+    } while (1);
+
+    struct range * r = NULL;
+
+    if (min != -1 && max != -1) {
+
+        r = calloc(1, sizeof(*r));
+        if (r == NULL) {
+            fprintf(stderr, "calloc failed\n");
+            return NULL;
+        }
+        r->min = min;
+        r->max = max;
+    }
+
+    return r;
+}
+
 /*
  * Reads command-line arguments.
  */
@@ -391,6 +456,7 @@ static void read_args(int argc, char* argv[]) {
         {"dry-run",        no_argument, &dry_run,  1},
         /* These options don't set a flag. We distinguish them by their indices. */
         {"input-file",     required_argument, 0, 'i'},
+        {"ranges",         required_argument, 0, 'r'},
         {"help",           no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -400,7 +466,7 @@ static void read_args(int argc, char* argv[]) {
         /* getopt_long stores the option index here. */
         int option_index = 0;
 
-        c = getopt_long(argc, argv, "i:h", long_options, &option_index);
+        c = getopt_long(argc, argv, "i:r:h", long_options, &option_index);
 
         /* Detect the end of the options. */
         if (c == -1)
@@ -419,6 +485,22 @@ static void read_args(int argc, char* argv[]) {
 
         case 'h':
             usage(argv[0], 0);
+            break;
+
+        case 'r':
+            {
+                char * ptr = optarg;
+                struct range * r;
+                while ((r = get_range(&ptr)) != NULL) {
+                    GLIST_ADD(ranges, r)
+                    if (ptr == NULL) {
+                        break;
+                    }
+                }
+                if (GLIST_BEGIN(ranges) != GLIST_END(ranges)) {
+                    current_range = GLIST_BEGIN(ranges);
+                }
+            }
             break;
 
         default:
@@ -659,13 +741,39 @@ static struct cap_device * select_device_pcap() {
     return NULL;
 }
 
+static int check_range(uint64_t number) {
+
+    if (GLIST_BEGIN(ranges) == GLIST_END(ranges)) {
+        return 0;
+    }
+
+    if (current_range != NULL) {
+        if (number >= current_range->min) {
+            if (number <= current_range->max) {
+                return 0;
+            } else {
+                current_range = current_range->next;
+                if (current_range == NULL) {
+                    done = 1;
+                    return -1;
+                }
+                return check_range(number);
+            }
+        }
+    }
+
+    return -1;
+}
+
 struct transfer * get_next_transfer(struct transfer * t) {
 
     struct transfer * it;
     for (it = t->next; it != GLIST_END(transfers); it = it->next) {
-        if (it->s->busnum == device_info->busnum && it->s->devnum == device_info->devnum) {
-            if (it->s->status == -EINPROGRESS && it->c != NULL) {
-                return it;
+        if (check_range(it->number) == 0) {
+            if (it->s->busnum == device_info->busnum && it->s->devnum == device_info->devnum) {
+                if (it->s->status == -EINPROGRESS && it->c != NULL) {
+                    return it;
+                }
             }
         }
     }
@@ -702,6 +810,7 @@ static int schedule_transfer(struct transfer * t, unsigned int usec) {
     if (next_timer == NULL) {
         return 1;
     }
+
     return 0;
 }
 
@@ -799,6 +908,7 @@ static int submit_transfer(void * user) {
 
     } else {
 
+        printf("%lu ", t->number);
         dump_packet(t->s);
     }
 
@@ -807,7 +917,7 @@ static int submit_transfer(void * user) {
         unsigned long long int delta = next->s->ts_sec * 1000000 + next->s->ts_usec - (t->s->ts_sec * 1000000 + t->s->ts_usec);
         unsigned long long int target = last.time + delta;
         unsigned long long int now = get_time();
-        unsigned int usec = 0;
+        unsigned int usec = 1;
         if (target > now) {
             usec = target - now;
         }
