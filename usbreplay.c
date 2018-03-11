@@ -814,6 +814,9 @@ static int schedule_transfer(struct transfer * t, unsigned int usec) {
     return 0;
 }
 
+/*
+ * Submit transfer if possible. If endpoint is busy transfer will be rescheduled after 1ms.
+ */
 static int submit_transfer(void * user) {
 
     if (done) {
@@ -917,13 +920,17 @@ static int submit_transfer(void * user) {
         unsigned long long int delta = next->s->ts_sec * 1000000 + next->s->ts_usec - (t->s->ts_sec * 1000000 + t->s->ts_usec);
         unsigned long long int target = last.time + delta;
         unsigned long long int now = get_time();
-        unsigned int usec = 1;
+        unsigned int usec = 0;
         if (target > now) {
             usec = target - now;
         }
-        if (schedule_transfer(next, usec) < 0) {
-            done = 1;
-            return 1;
+        if (usec > 0) {
+            if (schedule_transfer(next, usec) < 0) {
+                done = 1;
+                return 1;
+            }
+        } else {
+            return submit_transfer(next);
         }
     } else {
         done = 1;
