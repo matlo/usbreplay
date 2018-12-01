@@ -1,6 +1,6 @@
-#CFLAGS += -Wall -Wextra -g -O0 -fsanitize=address -fno-omit-frame-pointer -DGADGET_DEBUG
-#LDLIBS += -lusb-1.0 -ludev -laio -fsanitize=address -fno-omit-frame-pointer
-CFLAGS += -Wall -O3
-LDFLAGS += -Llib/gimxlog -Llib/gimxpoll -Llib/gimxserial -Llib/gimxprio -Llib/gimxtimer -Llib/gimxusb -Llib/gimxgadget
-LDLIBS += -lgimxlog -lgimxpoll -lgimxserial -lgimxprio -lgimxtimer -lgimxusb -lgimxgadget -lusb-1.0 -ludev -laio
+CFLAGS += -Wall -Wextra -O3
+LDFLAGS += -Llib/gimxlog -Llib/gimxpoll -Llib/gimxserial -Llib/gimxprio -Llib/gimxtimer -Llib/gimxusb
+LDLIBS += -lgimxlog -lgimxpoll -lgimxserial -lgimxprio -lgimxtimer -lgimxusb -lusb-1.0 -ludev
 CPPFLAGS+=-I../include -Iinclude -Ilib
+# CFLAGS += -g -O0 -fsanitize=address -fno-omit-frame-pointer
+# LDLIBS := -lasan $(LDLIBS)

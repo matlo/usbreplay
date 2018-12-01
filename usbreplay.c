@@ -18,6 +18,7 @@
 #include <gimxcommon/include/glist.h>
 #include <gimxcommon/include/gerror.h>
 #include <gimxtimer/include/gtimer.h>
+#include <gimxlog/include/glog.h>
 
 #ifdef WIN32
 #include <windows.h>
@@ -115,7 +116,7 @@ static volatile int done = 0;
 
 static uint64_t packet_number = 0;
 
-void terminate(int sig) {
+void terminate(int sig __attribute__((unused))) {
 
   done = 1;
 }
@@ -157,7 +158,7 @@ static void dump(const unsigned char* packet, unsigned char length, unsigned cha
     for (i = 0; i < length; ++i) {
         printf("0x%02x ", packet[i]);
         if (width != 0) {
-            if (i != 0 && i % width == 0) {
+            if ((i + 1) % width == 0) {
                 printf("\n");
             }
         }
@@ -417,12 +418,18 @@ static struct range * get_range(char ** ptr) {
             min = strtol(startptr, &endptr, 10);
             if (*endptr == '-') {
                 startptr = endptr + 1;
+                max = LONG_MAX;
             } else if (*endptr == '\0') {
+                break;
+            } else {
                 break;
             }
         } else {
             max = strtol(startptr, &endptr, 10);
             *ptr = endptr;
+            if (max == 0 && endptr == startptr) {
+                max = LONG_MAX;
+            }
             break;
         }
     } while (1);
@@ -454,6 +461,7 @@ static void read_args(int argc, char* argv[]) {
     {
         /* These options set a flag. */
         {"dry-run",        no_argument, &dry_run,  1},
+        {"debug",          no_argument, &debug,    1},
         /* These options don't set a flag. We distinguish them by their indices. */
         {"input-file",     required_argument, 0, 'i'},
         {"ranges",         required_argument, 0, 'r'},
@@ -495,6 +503,9 @@ static void read_args(int argc, char* argv[]) {
                     GLIST_ADD(ranges, r)
                     if (ptr == NULL) {
                         break;
+                    }
+                    if (debug) {
+                        printf("range: %ld %ld\n", r->min, r->max);
                     }
                 }
                 if (GLIST_BEGIN(ranges) != GLIST_END(ranges)) {
@@ -868,7 +879,7 @@ static int submit_transfer(void * user) {
                 if (ret == -1) {
                     fprintf(stderr, "gusb_poll failed\n");
                 }
-            } else if (t->s->flag_data) {
+            } else if (t->s->flag_data == 0x00) {
                 ret = gusb_write(usb_device, ep_num, ((unsigned char *)t->s) + sizeof(*t->s), t->s->length);
                 if (ret == -1) {
                     fprintf(stderr, "gusb_write failed\n");
@@ -877,9 +888,9 @@ static int submit_transfer(void * user) {
             break;
         case XFER_TYPE_CONTROL:
         {
-            unsigned char buf[sizeof(t->s->s.setup) + t->s->length];
+            unsigned char buf[sizeof(t->s->s.setup) + t->s->len_cap];
             memcpy(buf, t->s->s.setup, sizeof(t->s->s.setup));
-            memcpy(buf + sizeof(t->s->s.setup), ((unsigned char *)t->s) + sizeof(*t->s), t->s->length);
+            memcpy(buf + sizeof(t->s->s.setup), ((unsigned char *)t->s) + sizeof(*t->s), t->s->len_cap);
 
             struct usb_ctrlrequest * setup = (struct usb_ctrlrequest *) buf;
               if ((setup->bRequestType & USB_RECIP_MASK) == USB_RECIP_ENDPOINT) {
@@ -888,7 +899,7 @@ static int submit_transfer(void * user) {
                 }
             }
 
-            ret = gusb_write(usb_device, 0, buf, sizeof(t->s->s.setup) + t->s->length);
+            ret = gusb_write(usb_device, 0, buf, sizeof(t->s->s.setup) + t->s->len_cap);
             if (ret == -1) {
                 fprintf(stderr, "gusb_write failed\n");
             }
@@ -1039,7 +1050,7 @@ static int usb_read(void * user __attribute__((unused)), unsigned char endpoint,
             if (t->c->flag_data != 0) {
                 printf(KRED"unexpected data\n"KNRM);
                 dump = 1;
-            } else if (status != t->c->length) {
+            } else if ((unsigned int)status != t->c->length) {
                 printf(KRED"expected %u bytes, got %d\n"KNRM, t->c->length, status);
                 dump = 1;
             }
@@ -1051,7 +1062,7 @@ static int usb_read(void * user __attribute__((unused)), unsigned char endpoint,
             dump_packet(t->c);
             printf(KNRM);
         }
-        if (endpoint == 0x00) {
+        if (debug && endpoint == 0x00) {
             compare_data(t->c->length, ((unsigned char *)t->c) + sizeof(*t->c), status, (unsigned char *)buf);
         }
     }
@@ -1068,13 +1079,18 @@ static int usb_write(void * user __attribute__((unused)), unsigned char endpoint
     if (debug) {
         printf("pop %p for ep %02x\n", t, endpoint);
         printf("ep 0x%02x write status %d\n", endpoint, status);
-    }
 
-    if (t->s->flag_setup == 0) {
-        dump(t->s->s.setup, sizeof(t->s->s.setup), 8);
-    }
-    if (t->s->flag_data == 0) {
-        dump((unsigned char *)t->s + sizeof(t->s), t->s->length, 8);
+        printf("endpoint: %u\n", endpoint);
+
+        if (t->s->flag_setup == 0) {
+            printf("setup:\n");
+            dump(t->s->s.setup, sizeof(t->s->s.setup), 0);
+        }
+        if (t->s->flag_data == 0) {
+            printf("data:\n");
+            dump((unsigned char *)t->s + sizeof(*t->s), t->s->length, 8);
+            printf("\n");
+        }
     }
 
     compare_status(t, status);
@@ -1094,6 +1110,8 @@ static int usb_close(void * user __attribute__((unused))) {
 int main(int argc, char * argv[]) {
 
     (void) signal(SIGINT, terminate);
+
+    glog_set_all_levels(E_GLOG_LEVEL_DEBUG);
 
     read_args(argc, argv);
 
@@ -1124,17 +1142,6 @@ int main(int argc, char * argv[]) {
     } else {
         printf("No device configuration found in the capture file.\n");
         printf("Assuming endpoint layout matches.\n");
-    }
-
-    GTIMER_CALLBACKS timer_cb = {
-            .fp_read = timer_read,
-            .fp_close = timer_close,
-            .fp_register = REGISTER_FUNCTION,
-            .fp_remove = REMOVE_FUNCTION,
-    };
-    struct gtimer * timer = gtimer_start(NULL, 100000, &timer_cb);
-    if (timer == NULL) {
-        return -1;
     }
 
     if (dry_run == 0) {
@@ -1214,6 +1221,17 @@ int main(int argc, char * argv[]) {
     struct transfer * next = get_next_transfer(&GLIST_HEAD(transfers));
 
     submit_transfer(next);
+
+    GTIMER_CALLBACKS timer_cb = {
+            .fp_read = timer_read,
+            .fp_close = timer_close,
+            .fp_register = REGISTER_FUNCTION,
+            .fp_remove = REMOVE_FUNCTION,
+    };
+    struct gtimer * timer = gtimer_start(NULL, 100000, &timer_cb);
+    if (timer == NULL) {
+        return -1;
+    }
 
     gpoll();
 
