@@ -825,6 +825,54 @@ static int schedule_transfer(struct transfer * t, unsigned int usec) {
     return 0;
 }
 
+static void compare_data(unsigned int llength, unsigned char * left, unsigned int rlength, unsigned char * right, unsigned char width) {
+
+    unsigned int max_length = llength > rlength ? llength : rlength;
+
+    unsigned int i = 0;
+    while (i < max_length) {
+        unsigned int j;
+        for (j = i; j < i + width; ++j) {
+            if (j < llength) {
+                int red = 0;
+                if (j >= rlength || left[j] != right[j]) {
+                    red = 1;
+                }
+                if (red) {
+                    printf(KRED);
+                }
+                printf("0x%02x ", left[j]);
+                if (red) {
+                    printf(KNRM);
+                }
+            } else {
+                printf("     ");
+            }
+        }
+        printf("| ");
+        for (j = i; j < i + width; ++j) {
+            if (j < rlength) {
+                int red = 0;
+                if (j >= llength || left[j] != right[j]) {
+                    red = 1;
+                }
+                if (red) {
+                    printf(KRED);
+                }
+                printf("0x%02x ", right[j]);
+                if (red) {
+                    printf(KNRM);
+                }
+            } else {
+                printf("     ");
+            }
+        }
+        printf("\n");
+        i += width;
+    }
+    printf("\n");
+}
+
 /*
  * Submit transfer if possible. If endpoint is busy transfer will be rescheduled after 1ms.
  */
@@ -880,6 +928,112 @@ static int submit_transfer(void * user) {
                     fprintf(stderr, "gusb_poll failed\n");
                 }
             } else if (t->s->flag_data == 0x00) {
+                struct g920_out {
+                    uint8_t header[4];
+                    uint8_t data[10][6];
+                } PACKED;
+                struct g920_out * report = (struct g920_out *)(((unsigned char *)t->s) + sizeof(*t->s));
+                if (report->header[0] == 0x0b && report->data[0][0] == 0x0a) {
+                    ret = -1;
+                    break;
+                }
+                if (report->header[0] == 0x0b && report->data[0][0] == 0x02) {
+
+                    struct {
+                        int center;
+                        int spring;
+                        int constant;
+                        int damper;
+                        struct {
+                            int low;
+                            int high;
+                        } rumble;
+                    } features = {
+                            .center = 0,
+                            .spring = 1,
+                            .constant = 0,
+                            .damper = 0,
+                            .rumble = {
+                                    .low = 0,
+                                    .high = 0,
+                            },
+                    };
+
+                    // auto center?
+
+                    if (!features.center) {
+//                        report->data[0][2] = 0;
+//                        report->data[0][3] = 0;
+//                        report->data[0][4] = 0;
+//                        report->data[0][5] = 0;
+                    }
+
+                    // no ffb if zeroed
+
+//                    report->data[1][2] = 0;
+//                    report->data[1][3] = 0;
+//                    report->data[1][4] = 0;
+//                    report->data[1][5] = 0;
+
+                    if (!features.spring) {
+                        report->data[2][2] = 0;
+                        report->data[2][3] = 0;
+                        report->data[2][4] = 0;
+                        report->data[2][5] = 0;
+
+                        report->data[3][2] = 0;
+                        report->data[3][3] = 0;
+                        report->data[3][4] = 0;
+                        report->data[3][5] = 0;
+                    }
+
+                    if (!features.constant) {
+                        report->data[4][2] = 0;
+                        report->data[4][3] = 0;
+                        report->data[4][4] = 0;
+                        report->data[4][5] = 0;
+                    }
+
+                    if (!features.damper) {
+                        report->data[5][2] = 0;
+                        report->data[5][3] = 0;
+                        report->data[5][4] = 0;
+                        report->data[5][5] = 0;
+
+                        report->data[6][2] = 0;
+                        report->data[6][3] = 0;
+                        report->data[6][4] = 0;
+                        report->data[6][5] = 0;
+                    }
+
+                    if (!features.rumble.high) {
+                        report->data[7][2] = 0;
+                        report->data[7][3] = 0;
+                        report->data[7][4] = 0;
+                        report->data[7][5] = 0;
+                    }
+
+                    // ?
+
+//                        report->data[8][2] = 0;
+//                        report->data[8][3] = 0;
+//                        report->data[8][4] = 0;
+//                        report->data[8][5] = 0;
+
+                    if (!features.rumble.low) {
+                        report->data[9][2] = 0;
+                        report->data[9][3] = 0;
+                        report->data[9][4] = 0;
+                        report->data[9][5] = 0;
+                    }
+
+                    static struct g920_out last = {};
+
+                    compare_data(sizeof(last.header), (uint8_t *)last.header, sizeof(report->header), (uint8_t *)report->header, 4);
+                    compare_data(sizeof(last.data), (uint8_t *)last.data, sizeof(report->data), (uint8_t *)report->data, 6);
+
+                    last = *report;
+                }
                 ret = gusb_write(usb_device, ep_num, ((unsigned char *)t->s) + sizeof(*t->s), t->s->length);
                 if (ret == -1) {
                     fprintf(stderr, "gusb_write failed\n");
@@ -979,54 +1133,6 @@ static void compare_status(struct transfer * t, int status) {
     }
 }
 
-static void compare_data(unsigned int llength, unsigned char * left, unsigned int rlength, unsigned char * right) {
-
-    unsigned int max_length = llength > rlength ? llength : rlength;
-
-    unsigned int i = 0;
-    while (i < max_length) {
-        unsigned int j;
-        for (j = i; j < i + 8; ++j) {
-            if (j < llength) {
-                int red = 0;
-                if (j >= rlength || left[j] != right[j]) {
-                    red = 1;
-                }
-                if (red) {
-                    printf(KRED);
-                }
-                printf("0x%02x ", left[j]);
-                if (red) {
-                    printf(KNRM);
-                }
-            } else {
-                printf("     ");
-            }
-        }
-        printf("| ");
-        for (j = i; j < i + 8; ++j) {
-            if (j < rlength) {
-                int red = 0;
-                if (j >= llength || left[j] != right[j]) {
-                    red = 1;
-                }
-                if (red) {
-                    printf(KRED);
-                }
-                printf("0x%02x ", right[j]);
-                if (red) {
-                    printf(KNRM);
-                }
-            } else {
-                printf("     ");
-            }
-        }
-        printf("\n");
-        i += 8;
-    }
-    printf("\n");
-}
-
 static int usb_read(void * user __attribute__((unused)), unsigned char endpoint, const void * buf, int status) {
 
     struct transfer * t = ep_transfers[endpoint & USB_ENDPOINT_NUMBER_MASK][endpoint >> 7];
@@ -1063,7 +1169,7 @@ static int usb_read(void * user __attribute__((unused)), unsigned char endpoint,
             printf(KNRM);
         }
         if (debug && endpoint == 0x00) {
-            compare_data(t->c->length, ((unsigned char *)t->c) + sizeof(*t->c), status, (unsigned char *)buf);
+            compare_data(t->c->length, ((uint8_t *)t->c) + sizeof(*t->c), status, (uint8_t *)buf, 8);
         }
     }
 
@@ -1088,7 +1194,8 @@ static int usb_write(void * user __attribute__((unused)), unsigned char endpoint
         }
         if (t->s->flag_data == 0) {
             printf("data:\n");
-            dump((unsigned char *)t->s + sizeof(*t->s), t->s->length, 8);
+            dump((unsigned char *)t->s + sizeof(*t->s), 4, 4);
+            dump((unsigned char *)t->s + sizeof(*t->s) + 4, t->s->length - 4, 6);
             printf("\n");
         }
     }
